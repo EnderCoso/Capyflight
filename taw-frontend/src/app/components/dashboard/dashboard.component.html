@@ -1,0 +1,340 @@
+<div class="container mt-4 mb-5">
+
+  <div *ngIf="isPassenger">
+    <h2 class="mb-4 text-primary"><i class="fas fa-ticket-alt"></i> I Miei Viaggi</h2>
+    
+    <div *ngIf="myTickets.length === 0" class="alert alert-info shadow-sm border-info">
+      <i class="fas fa-info-circle"></i> Non hai ancora prenotato nessun volo. 
+      <a routerLink="/home" class="fw-bold text-decoration-none">Cerca un volo ora!</a>
+    </div>
+
+    <div class="row">
+      <div class="col-md-6 col-lg-4 mb-4" *ngFor="let t of myTickets">
+        <div class="card h-100 shadow border-0 border-start border-4 border-primary hover-effect">
+          <div class="card-body">
+            
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <span class="badge bg-primary">{{ t.flight?.airline?.airlineName || 'Compagnia' }}</span>
+              <small class="text-muted fw-bold">{{ t.flight?.flightCode }}</small>
+            </div>
+
+            <h5 class="card-title fw-bold text-dark">
+              {{ t.flight?.route?.departureCity }} 
+              <i class="fas fa-long-arrow-alt-right text-muted mx-1"></i> 
+              {{ t.flight?.route?.arrivalCity }}
+            </h5>
+            
+            <div class="mt-3">
+              <p class="mb-1">
+                <i class="far fa-calendar-alt text-primary me-2"></i> 
+                <strong>{{ t.flight?.departureTime | date:'dd/MM/yyyy' }}</strong>
+              </p>
+              <p class="mb-1">
+                <i class="far fa-clock text-primary me-2"></i> 
+                <strong>{{ t.flight?.departureTime | date:'HH:mm' }}</strong>
+              </p>
+            </div>
+
+            <hr class="opacity-25">
+
+            <div class="d-flex justify-content-between">
+              <div>
+                <small class="text-muted d-block">Posto</small>
+                <span class="fw-bold fs-5 text-dark">{{ t.seatNumber }}</span>
+              </div>
+              <div class="text-end">
+                <small class="text-muted d-block">Classe</small>
+                <span class="badge bg-light text-dark border">{{ t.class | uppercase }}</span>
+              </div>
+            </div>
+
+          </div>
+          <div class="card-footer bg-white d-flex justify-content-between align-items-center border-0 pt-0 pb-3">
+            <span class="text-muted small">Prezzo Pagato</span>
+            <span class="fw-bold text-success fs-5">{{ t.pricePaid | currency:'EUR' }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <div *ngIf="!isPassenger">
+
+<div *ngIf="isAdmin" class="alert alert-dark mb-5 shadow">
+  <h4>👑 Pannello Admin: Invita Compagnia</h4>
+  <p>Inserisci l'email della nuova compagnia. Verrà generata una password temporanea.</p>
+  
+  <div class="input-group mb-3">
+    <input type="email" class="form-control" placeholder="Email Compagnia (es. ceo@lufthansa.com)" [(ngModel)]="newAirlineEmail">
+    <button class="btn btn-warning fw-bold" (click)="inviteAirline()">Genera Invito 📩</button>
+  </div>
+  
+  <div *ngIf="tempPassword" class="alert alert-success mt-2">
+    <strong>Invito Creato!</strong><br>
+    Comunica questa password temporanea alla compagnia:<br>
+    <h2 class="user-select-all">{{ tempPassword }}</h2>
+  </div>
+</div>
+
+<div *ngIf="isAdmin && users.length > 0" class="card shadow mb-5">
+    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+      <h5 class="m-0">👥 Gestione Utenti del Sistema</h5>
+      <span class="badge bg-secondary">{{ users.length }} Utenti Registrati</span>
+    </div>
+    <div class="card-body p-0">
+      <table class="table table-hover table-striped mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Ruolo</th>
+            <th>Email</th>
+            <th>Dettagli (Nome / Compagnia)</th>
+            <th>Stato</th>
+            <th class="text-end">Azioni</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let u of users">
+            <td>
+              <span class="badge" 
+                [ngClass]="{
+                  'bg-danger': u.role === 'admin', 
+                  'bg-primary': u.role === 'airline', 
+                  'bg-success': u.role === 'passenger'
+                }">
+                {{ u.role | uppercase }}
+              </span>
+            </td>
+            <td>{{ u.email }}</td>
+            <td>
+              <span *ngIf="u.role === 'airline'">✈️ {{ u.airlineName || 'Non configurato' }} ({{ u.iataCode || 'N/A' }})</span>
+              <span *ngIf="u.role === 'passenger'">👤 {{ u.name }} {{ u.surname }}</span>
+              <span *ngIf="u.role === 'admin'">🛡️ Amministratore</span>
+            </td>
+            <td>
+              <span *ngIf="u.mustChangePassword" class="badge bg-warning text-dark">In Attesa Setup</span>
+              <span *ngIf="!u.mustChangePassword" class="badge bg-light text-dark border">Attivo</span>
+            </td>
+            <td class="text-end">
+              <button class="btn btn-sm btn-outline-danger" 
+                      (click)="deleteUser(u)" 
+                      [disabled]="u.role === 'admin'"
+                      title="Elimina Utente">
+                🗑️ Elimina
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+<div class="container mt-4 mb-5">
+  <h2 class="mb-4">💼 Dashboard Compagnia</h2>
+
+  <div class="row mb-5" *ngIf="stats">
+    
+    <div class="col-md-3">
+      <div class="card text-white bg-success mb-3 shadow h-100">
+        <div class="card-header fw-bold">💰 Ricavi Totali</div>
+        <div class="card-body">
+          <h2 class="card-title">{{ stats.totalRevenue | currency:'EUR' }}</h2>
+        </div>
+      </div>
+    </div>
+    
+    <div class="col-md-3">
+      <div class="card text-white bg-info mb-3 shadow h-100">
+        <div class="card-header fw-bold">👥 Passeggeri</div>
+        <div class="card-body">
+          <h2 class="card-title">{{ stats.totalPassengers }}</h2>
+        </div>
+      </div>
+    </div>
+    
+    <div class="col-md-3">
+      <div class="card text-white bg-primary mb-3 shadow h-100">
+        <div class="card-header fw-bold">✈️ Voli Gestiti</div>
+        <div class="card-body">
+          <h2 class="card-title">{{ stats.flightCount }}</h2>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-3">
+      <div class="card text-white bg-warning mb-3 shadow h-100">
+        <div class="card-header fw-bold text-dark">🔥 Rotta Top</div>
+        <div class="card-body text-dark">
+          <h5 class="card-title fw-bold">{{ stats.mostFrequentRoute }}</h5>
+          <small>La più frequentata</small>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <hr>
+
+  <div class="row g-4">
+    
+    <div class="col-md-6">
+      <div class="card shadow h-100">
+        <div class="card-header bg-secondary text-white">
+          <h5>✈️ Nuova Flotta</h5>
+        </div>
+        <div class="card-body">
+          <form (ngSubmit)="createAircraft()">
+            <div class="mb-2">
+              <label class="small">Modello Aereo</label>
+              <input type="text" class="form-control" [(ngModel)]="newAircraft.model" name="acModel" placeholder="es. Boeing 737" required>
+            </div>
+            <div class="row mb-2">
+              <div class="col">
+                <label class="small">File Totali</label>
+                <input type="number" class="form-control" [(ngModel)]="newAircraft.rows" name="acRows" required>
+              </div>
+              <div class="col">
+                <label class="small">Posti x Fila</label>
+                <input type="number" class="form-control" [(ngModel)]="newAircraft.seatsPerRow" name="acSeats" required>
+              </div>
+            </div>
+            <div class="row mb-3">
+              <div class="col">
+                <label class="small">Cap. Business</label>
+                <input type="number" class="form-control" [(ngModel)]="newAircraft.capacityBusiness" name="acBus">
+              </div>
+              <div class="col">
+                <label class="small">Cap. First</label>
+                <input type="number" class="form-control" [(ngModel)]="newAircraft.capacityFirst" name="acFirst">
+              </div>
+            </div>
+            <button type="submit" class="btn btn-outline-secondary w-100">Aggiungi Aereo</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-6">
+      <div class="card shadow h-100">
+        <div class="card-header bg-secondary text-white">
+          <h5>🗺️ Nuova Rotta</h5>
+        </div>
+        <div class="card-body">
+          <form (ngSubmit)="createRoute()">
+            <div class="row mb-2">
+              <div class="col">
+                <label class="small">Città Partenza</label>
+                <input type="text" class="form-control" [(ngModel)]="newRoute.departureCity" name="rDepC" placeholder="es. Roma" required>
+              </div>
+              <div class="col">
+                <label class="small">Codice Aero. (Part)</label>
+                <input type="text" class="form-control" [(ngModel)]="newRoute.departureAirport" name="rDepA" placeholder="es. FCO" required>
+              </div>
+            </div>
+            <div class="row mb-2">
+              <div class="col">
+                <label class="small">Città Arrivo</label>
+                <input type="text" class="form-control" [(ngModel)]="newRoute.arrivalCity" name="rArrC" placeholder="es. New York" required>
+              </div>
+              <div class="col">
+                <label class="small">Codice Aero. (Arr)</label>
+                <input type="text" class="form-control" [(ngModel)]="newRoute.arrivalAirport" name="rArrA" placeholder="es. JFK" required>
+              </div>
+            </div>
+            <div class="mb-3">
+              <label class="small">Durata (minuti)</label>
+              <input type="number" class="form-control" [(ngModel)]="newRoute.durationMinutes" name="rDur" required>
+            </div>
+            <button type="submit" class="btn btn-outline-secondary w-100">Traccia Rotta</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12">
+      <div class="card shadow border-primary">
+        <div class="card-header bg-dark text-white">
+          <h4>🚀 Schedula Volo</h4>
+        </div>
+        <div class="card-body">
+          <form (ngSubmit)="createFlight()">
+            
+            <div class="row mb-3">
+              <div class="col-md-2">
+                <label class="form-label">Codice Volo</label>
+                <input type="text" class="form-control" [(ngModel)]="newFlight.flightCode" name="code" placeholder="AZxxx" required>
+              </div>
+              
+              <div class="col-md-5">
+                <label class="form-label">Aereo</label>
+                <select class="form-select" [(ngModel)]="newFlight.aircraftId" name="aircraft" required>
+                  <option value="" disabled selected>-- Seleziona Aereo --</option>
+                  <option *ngFor="let a of aircrafts" [value]="a._id">
+                    {{ a.model }} (Tot: {{ a.rows * a.seatsPerRow }} posti)
+                  </option>
+                </select>
+              </div>
+
+              <div class="col-md-5">
+                <label class="form-label">Rotta</label>
+                <select class="form-select" [(ngModel)]="newFlight.routeId" name="route" required>
+                  <option value="" disabled selected>-- Seleziona Rotta --</option>
+                  <option *ngFor="let r of routes" [value]="r._id">
+                    {{ r.departureCity }} ({{r.departureAirport}}) ➝ {{ r.arrivalCity }} ({{r.arrivalAirport}})
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row mb-3">
+              <div class="col"><label class="small">Prezzo Eco (€)</label><input type="number" class="form-control" [(ngModel)]="newFlight.priceEconomy" name="pE" required></div>
+               <div class="col"><label class="small">Prezzo Bus (€)</label><input type="number" class="form-control" [(ngModel)]="newFlight.priceBusiness" name="pB" required></div>
+               <div class="col"><label class="small">Prezzo First (€)</label><input type="number" class="form-control" [(ngModel)]="newFlight.priceFirst" name="pF" required></div>
+            </div>
+
+            <div class="row mb-3">
+              <div class="col-md-6">
+                <label class="small">Data Partenza</label>
+                <input type="date" class="form-control" [(ngModel)]="newFlight.date" name="date" required>
+              </div>
+              <div class="col-md-6">
+                <label class="small">Ora Partenza</label>
+                <input type="time" class="form-control" [(ngModel)]="newFlight.departureTime" name="depTime" required>
+              </div>
+              </div>
+
+            <button type="submit" class="btn btn-primary w-100 fw-bold">PUBBLICA VOLO</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="mt-5 mb-5" *ngIf="stats?.flights?.length > 0">
+    <h4>📋 Riepilogo Voli Attivi</h4>
+    <table class="table table-hover table-striped">
+      <thead class="table-dark">
+        <tr>
+          <th>Volo</th>
+          <th>Rotta</th>
+          <th>Ricavo</th>
+          <th>Passeggeri</th>
+          <th>Occupazione</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let f of stats.flights">
+          <td><strong>{{ f.flightCode }}</strong></td>
+          <td>{{ f.route }}</td> <td>{{ f.revenue | currency:'EUR' }}</td>
+          <td>{{ f.passengers }}</td>
+          <td>
+            <span class="badge" [ngClass]="{'bg-success': f.occupancy === '100%', 'bg-warning': f.occupancy !== '100%'}">
+              {{ f.occupancy }}
+            </span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>

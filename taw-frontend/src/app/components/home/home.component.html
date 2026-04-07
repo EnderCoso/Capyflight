@@ -1,0 +1,182 @@
+<div class="container mt-4">
+  
+  <div class="card p-4 mb-5 bg-white shadow-sm border-0">
+    <h4 class="mb-3 text-primary"><i class="fas fa-plane-departure"></i> Cerca il tuo volo</h4>
+    <div class="row g-3">
+      <div class="col-md-3">
+        <label class="small text-muted mb-1 fw-bold">Partenza</label>
+        <input type="text" class="form-control bg-light" placeholder="es. Roma" [(ngModel)]="fromCity">
+      </div>
+      <div class="col-md-3">
+        <label class="small text-muted mb-1 fw-bold">Destinazione</label>
+        <input type="text" class="form-control bg-light" placeholder="es. New York" [(ngModel)]="toCity">
+      </div>
+      <div class="col-md-3">
+        <label class="small text-muted mb-1 fw-bold">Data</label>
+        <input type="date" class="form-control bg-light" [(ngModel)]="selectedDate">
+      </div>
+      <div class="col-md-3 d-flex align-items-end">
+        <button class="btn btn-primary w-100 fw-bold py-2 shadow-sm" (click)="loadFlights()">
+          Cerca Voli 🔎
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <h3 class="mb-4 fw-bold text-dark">✈️ Risultati Ricerca</h3>
+  
+  <div *ngIf="flights.length === 0" class="alert alert-warning shadow-sm border-warning">
+    <i class="fas fa-exclamation-circle"></i> Nessun volo trovato. Prova a cambiare date o destinazioni.
+  </div>
+
+  <div class="row">
+    <div class="col-md-6 col-lg-12 mb-4" *ngFor="let flight of flights">
+      <div class="card h-100 shadow hover-effect border-0">
+        
+        <div class="card-header bg-white border-bottom pt-3 pb-3">
+          <div class="d-flex justify-content-between align-items-center">
+            <div>
+              <span *ngIf="flight.type === 'direct'" class="badge bg-success me-2">DIRETTO</span>
+              <span *ngIf="flight.type === 'stopover'" class="badge bg-warning text-dark me-2">1 SCALO</span>
+              
+              <span class="fw-bold text-primary fs-5">
+                {{ flight.type === 'direct' ? flight.airline?.airlineName : flight.legs[0].airline?.airlineName }}
+              </span>
+              <small class="text-muted ms-2">({{ flight.flightCode }})</small>
+            </div>
+
+            <h3 class="text-success fw-bold m-0">
+              {{ (flight.type === 'direct' ? flight.priceEconomy : flight.totalPrice) | currency:'EUR' }}
+            </h3>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <div *ngIf="flight.type === 'direct'" class="row align-items-center text-center">
+            <div class="col-md-3">
+              <small class="text-muted">Partenza</small><br>
+              <strong class="fs-4">{{ flight.departureTime | date:'HH:mm' }}</strong><br>
+              <span class="text-muted">{{ flight.route?.departureCity }}</span>
+            </div>
+            
+            <div class="col-md-6 position-relative my-2">
+              <div class="d-flex align-items-center justify-content-center">
+                <hr class="w-100 border-primary opacity-50">
+                <i class="fas fa-plane text-primary mx-2"></i>
+                <hr class="w-100 border-primary opacity-50">
+              </div>
+              <small class="text-muted">{{ flight.route?.durationMinutes }} min</small>
+            </div>
+
+            <div class="col-md-3">
+              <small class="text-muted">Arrivo</small><br>
+              <strong class="fs-4">{{ flight.arrivalTime | date:'HH:mm' }}</strong><br>
+              <span class="text-muted">{{ flight.route?.arrivalCity }}</span>
+            </div>
+          </div>
+
+          <div *ngIf="flight.type === 'stopover'" class="row align-items-center bg-light py-3 rounded mx-1">
+            <div class="col-md-4 text-center border-end">
+              <small class="text-muted d-block mb-1 text-uppercase">Volo 1</small>
+              <div class="d-flex justify-content-between px-2">
+                <div class="text-start">
+                  <strong>{{ flight.legs[0].departureTime | date:'HH:mm' }}</strong><br>
+                  <small>{{ flight.legs[0].route.departureCity }}</small>
+                </div>
+                <div class="align-self-center text-muted">➝</div>
+                <div class="text-end">
+                  <strong>{{ flight.stopoverCity }}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div class="col-md-4 text-center">
+              <span class="badge bg-warning text-dark mb-1">SCALO A {{ flight.stopoverCity | uppercase }}</span>
+              <br>
+              <small class="text-muted">Cambio aereo</small>
+            </div>
+
+            <div class="col-md-4 text-center border-start">
+              <small class="text-muted d-block mb-1 text-uppercase">Volo 2</small>
+              <div class="d-flex justify-content-between px-2">
+                <div class="text-start">
+                  <strong>{{ flight.stopoverCity }}</strong>
+                </div>
+                <div class="align-self-center text-muted">➝</div>
+                <div class="text-end">
+                  <strong>{{ flight.arrivalTime | date:'HH:mm' }}</strong><br>
+                  <small>{{ flight.arrivalCity }}</small>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-4 d-flex justify-content-between align-items-center">
+            <div class="small text-muted">
+              <i class="far fa-calendar-alt"></i> {{ flight.departureTime | date:'longDate' }}
+            </div>
+
+            <button class="btn btn-outline-primary px-4 fw-bold" (click)="openBookingModal(flight)">
+              Seleziona Volo <i class="fas fa-arrow-right ms-1"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div *ngIf="showModal" class="modal-backdrop-custom">
+  <div class="modal-content-custom shadow-lg">
+    
+    <div class="modal-header bg-primary text-white">
+      <h5 class="m-0">Prenota Volo: {{ selectedFlight?.flightCode }}</h5>
+      <button type="button" class="btn-close btn-close-white" (click)="closeModal()"></button>
+    </div>
+
+    <div class="modal-body">
+      
+      <div class="alert alert-info py-2">
+        <div *ngIf="selectedFlight?.type === 'direct'">
+          Tratta: <b>{{ selectedFlight?.route?.departureCity }} ➝ {{ selectedFlight?.route?.arrivalCity }}</b>
+        </div>
+        <div *ngIf="selectedFlight?.type === 'stopover'">
+          <span class="badge bg-dark mb-1">Tratta {{ currentLegIndex + 1 }} di 2</span><br>
+          Percorso: 
+          <b *ngIf="currentLegIndex === 0">{{ selectedFlight.legs[0].route.departureCity }} ➝ {{ selectedFlight.stopoverCity }}</b>
+          <b *ngIf="currentLegIndex === 1">{{ selectedFlight.stopoverCity }} ➝ {{ selectedFlight.legs[1].route.arrivalCity }}</b>
+        </div>
+      </div>
+      
+      <div class="mb-3">
+        <label class="form-label fw-bold">Seleziona il tuo posto:</label>
+        <select class="form-select" [(ngModel)]="bookingSeat">
+          <option value="" disabled selected>-- Scegli un posto disponibile --</option>
+          <option *ngFor="let seat of availableSeats" [value]="seat.number">
+            {{ seat.number }} ({{ seat.type | uppercase }}) - {{ seat.price | currency:'EUR' }}
+          </option>
+        </select>
+      </div>
+
+      <div class="card bg-light border-0 p-3" *ngIf="currentLegIndex === 0">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="bag" [(ngModel)]="addBag">
+          <label class="form-check-label fw-bold" for="bag">
+            🧳 Aggiungi Bagaglio Extra (+50€)
+          </label>
+        </div>
+        <small class="text-muted">L'opzione bagaglio verrà applicata a tutto l'itinerario.</small>
+      </div>
+    </div>
+
+    <div class="modal-footer border-top-0">
+      <button class="btn btn-link text-secondary text-decoration-none" (click)="closeModal()">Annulla</button>
+      
+      <button class="btn btn-success px-4" (click)="confirmBooking()" [disabled]="!bookingSeat">
+        <span *ngIf="selectedFlight?.type === 'direct' || currentLegIndex === 1">Conferma e Paga ✅</span>
+        <span *ngIf="selectedFlight?.type === 'stopover' && currentLegIndex === 0">Seleziona Posto 2ª Tratta <i class="fas fa-chevron-right ms-1"></i></span>
+      </button>
+    </div>
+
+  </div>
+</div>

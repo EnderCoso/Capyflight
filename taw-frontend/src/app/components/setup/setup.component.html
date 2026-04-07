@@ -1,0 +1,35 @@
+<div class="container mt-5">
+  <div class="card shadow border-warning p-4 mx-auto" style="max-width: 500px;">
+    
+    <div class="card-header bg-warning text-dark text-center">
+      <h4 class="m-0 fw-bold">⚠️ Configurazione Obbligatoria</h4>
+    </div>
+    
+    <div class="card-body">
+      <p class="text-center text-muted">
+        Benvenuto, Partner! Per attivare il tuo account Compagnia Aerea, imposta i tuoi dati definitivi.
+      </p>
+      
+      <form (ngSubmit)="confirmSetup()">
+        
+        <div class="mb-3">
+          <label class="fw-bold small">Nome Compagnia</label>
+          <input type="text" class="form-control" [(ngModel)]="data.airlineName" name="name" placeholder="es. Alitalia" required>
+        </div>
+        
+        <div class="mb-3">
+          <label class="fw-bold small">Codice IATA (2-3 Lettere)</label>
+          <input type="text" class="form-control text-uppercase" [(ngModel)]="data.iataCode" name="iata" placeholder="es. AZ" required maxlength="3">
+        </div>
+
+        <div class="mb-3">
+          <label class="fw-bold small">Nuova Password (Definitiva)</label>
+          <input type="password" class="form-control" [(ngModel)]="data.newPassword" name="pw" required minlength="6">
+          <div class="form-text">Questa sostituirà la password temporanea.</div>
+        </div>
+
+        <button type="submit" class="btn btn-dark w-100 fw-bold mt-2">Attiva Account 🚀</button>
+      </form>
+    </div>
+  </div>
+</div>

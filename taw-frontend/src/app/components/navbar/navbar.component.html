@@ -1,0 +1,34 @@
+<nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm">
+  <div class="container">
+    
+    <a class="navbar-brand d-flex align-items-center" routerLink="/home">
+      <img src="Logo.png" alt="CapyFlights Logo" height="60" class="d-inline-block align-text-top">
+    </a>
+    
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    
+    <div class="collapse navbar-collapse" id="navbarNav">
+      <ul class="navbar-nav ms-auto">
+        <li class="nav-item">
+          <a class="nav-link fw-bold" routerLink="/home" routerLinkActive="active">Home</a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link fw-bold" routerLink="/dashboard" routerLinkActive="active">Dashboard</a>
+        </li>
+
+        <li class="nav-item" *ngIf="!isLoggedIn">
+          <a class="nav-link fw-bold" routerLink="/login" routerLinkActive="active">Login</a>
+        </li>
+
+        <li class="nav-item" *ngIf="isLoggedIn">
+          <a class="nav-link fw-bold text-danger" style="cursor: pointer;" (click)="logout()">
+            Logout <i class="fas fa-sign-out-alt"></i>
+          </a>
+        </li>
+
+      </ul>
+    </div>
+  </div>
+</nav>

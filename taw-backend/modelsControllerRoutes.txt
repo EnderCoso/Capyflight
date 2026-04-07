@@ -1,0 +1,884 @@
+AUTH CONTROLLER.js
+
+const User = require('../models/User');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+
+const Aircraft = require('../models/Aircraft'); 
+const Route = require('../models/Route');
+const Flight = require('../models/Flight');
+
+// Genera il Token
+const generateToken = (id, role) => {
+    return jwt.sign({ id, role }, process.env.JWT_SECRET, {
+        expiresIn: '30d', // Il login dura 30 giorni
+    });
+};
+
+// @desc    Registra un nuovo passeggero
+// @route   POST /api/auth/register
+exports.register = async (req, res) => {
+    try {
+        const { email, password, name, surname, birthDate } = req.body;
+
+        // Verifica se esiste già
+        const userExists = await User.findOne({ email });
+        if (userExists) {
+            return res.status(400).json({ message: 'Utente già esistente' });
+        }
+
+        // Crea utente (Forziamo ruolo 'passenger' per le registrazioni pubbliche)
+        const user = await User.create({
+            email,
+            password,
+            role: 'passenger', // [cite: 261] Gestione ruoli
+            name,
+            surname,
+            birthDate,
+            mustChangePassword: false
+        });
+
+        if (user) {
+            res.status(201).json({
+                _id: user._id,
+                email: user.email,
+                role: user.role,
+                token: generateToken(user._id, user.role)
+            });
+        } else {
+            res.status(400).json({ message: 'Dati utente non validi' });
+        }
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+exports.createAirline = async (req, res) => {
+    try {
+        const { email, tempPassword } = req.body;
+
+        // Verifica esistenza
+        const userExists = await User.findOne({ email });
+        if (userExists) return res.status(400).json({ message: 'Email già in uso' });
+
+        // Crea l'utente "ibrido"
+        const user = await User.create({
+            email,
+            password: tempPassword, // Verrà hashata dal pre-save
+            role: 'airline',
+            mustChangePassword: true // <--- IL GANCIO
+        });
+
+        res.status(201).json({
+            message: 'Compagnia invitata con successo. Comunica la password temporanea.',
+            email: user.email,
+            tempPassword: tempPassword // La rimandiamo indietro per comodità dell'admin
+        });
+
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+// @desc    Login utente & ottieni token
+// @route   POST /api/auth/login
+exports.login = async (req, res) => {
+    const { email, password } = req.body;
+    try {
+        const user = await User.findOne({ email });
+
+        if (user && (await user.matchPassword(password))) {
+            res.json({
+                _id: user._id,
+                name: user.name || user.airlineName,
+                email: user.email,
+                role: user.role,
+                mustChangePassword: user.mustChangePassword, // <--- FONDAMENTALE PER IL FRONTEND
+                token: generateToken(user._id, user.role),
+            });
+        } else {
+            res.status(401).json({ message: 'Credenziali non valide' });
+        }
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+exports.completeSetup = async (req, res) => {
+    try {
+        // L'utente è loggato (ha il token), ma deve cambiare password
+        const { newPassword, airlineName, iataCode } = req.body;
+        const user = await User.findById(req.user._id);
+
+        if (!user) return res.status(404).json({ message: 'Utente non trovato' });
+
+        // Aggiorniamo i dati
+        user.password = newPassword; // Il pre-save la hasherà
+        user.airlineName = airlineName;
+        user.iataCode = iataCode;
+        user.mustChangePassword = false; // Sbloccato!
+
+        await user.save();
+
+        res.json({ 
+            message: 'Account configurato con successo!',
+            user: {
+                _id: user._id,
+                email: user.email,
+                role: user.role,
+                airlineName: user.airlineName
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+exports.deleteUser = async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id);
+        if (!user) return res.status(404).json({ message: 'Utente non trovato' });
+
+        // Protezione Admin: Non cancellare admin
+        if (user.role === 'admin') {
+            return res.status(400).json({ message: 'Non puoi cancellare un admin' });
+        }
+
+        // --- PULIZIA A CASCATA (NUOVO) ---
+        if (user.role === 'airline') {
+            // 1. Cancella tutti gli aerei di questa compagnia
+            await Aircraft.deleteMany({ airline: user._id });
+            
+            // 2. Cancella le rotte create da questa compagnia (se hanno il campo airline)
+            // Se le rotte sono condivise/pubbliche, salta questo passaggio.
+            // Ma se ogni compagnia ha le sue rotte private:
+            // await Route.deleteMany({ airline: user._id });
+            
+            // 3. Cancella i voli futuri (Opzionale ma consigliato)
+            // await Flight.deleteMany({ airline: user._id });
+        }
+
+        // Infine, cancella l'utente
+        await user.deleteOne(); 
+        
+        res.json({ message: 'Utente e dati associati eliminati con successo' });
+
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Utility per Admin: vedere lista utenti
+exports.getAllUsers = async (req, res) => {
+    try {
+        const users = await User.find().select('-password');
+        res.json(users);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+FINE File
+
+BOOKING CONTROLLER.js
+
+const Flight = require('../models/Flight');
+const Ticket = require('../models/Ticket');
+const User = require('../models/User');
+
+// @desc    Acquista un biglietto
+// @route   POST /api/bookings
+// @access  Private (Solo passeggeri loggati)
+exports.bookFlight = async (req, res) => {
+    // NOTA: Abbiamo rimosso la transazione (session) perché MongoDB Standalone non le supporta.
+    try {
+        const { flightId, seatNumber, extras } = req.body;
+        const passengerId = req.user._id;
+
+        // 1. Trova il volo
+        const flight = await Flight.findById(flightId);
+        if (!flight) {
+            return res.status(404).json({ message: 'Volo non trovato' });
+        }
+
+        // 2. Trova il posto specifico
+        const seatIndex = flight.seats.findIndex(s => s.number === seatNumber);
+        
+        if (seatIndex === -1) {
+            return res.status(404).json({ message: 'Posto non esistente su questo aereo' });
+        }
+
+        // 3. VERIFICA DISPONIBILITÀ
+        if (flight.seats[seatIndex].isOccupied) {
+            return res.status(400).json({ message: 'Posto già occupato! Scegline un altro.' });
+        }
+
+        // 4. Calcola prezzo
+        let finalPrice = flight.seats[seatIndex].price;
+        
+        // FIX: Gestione completa degli Extras definiti nel modello Ticket
+        if (extras) {
+            if (extras.extraBaggage) finalPrice += 50;      // Bagaglio
+            if (extras.priorityBoarding) finalPrice += 30;  // Priorità (prezzo inventato da me, cambialo se vuoi)
+            if (extras.extraLegroom) finalPrice += 40;      // Spazio gambe (prezzo inventato)
+        }
+
+        // 5. AGGIORNA IL VOLO (Blocca il posto)
+        flight.seats[seatIndex].isOccupied = true;
+        flight.seats[seatIndex].occupiedBy = passengerId;
+        
+        // Salviamo il volo PRIMA di creare il biglietto
+        await flight.save(); 
+
+        // 6. CREA IL BIGLIETTO
+        const ticket = await Ticket.create({
+            passenger: passengerId,
+            flight: flightId,
+            seatNumber: seatNumber,
+            extras: extras || {},
+            totalPrice: finalPrice,
+            status: 'confirmed'
+        });
+
+        res.status(201).json({ 
+            message: 'Prenotazione confermata!', 
+            ticket: ticket 
+        });
+
+    } catch (error) {
+        // Se il volo era stato salvato ma il biglietto fallisce, avremmo un'inconsistenza.
+        // In un progetto reale servirebbe un rollback manuale qui, ma per l'esame va bene così.
+        res.status(400).json({ message: error.message });
+    }
+};
+
+// @desc    Ottieni i biglietti dell'utente loggato
+// @route   GET /api/bookings/my-tickets
+exports.getMyTickets = async (req, res) => {
+    try {
+        const tickets = await Ticket.find({ passenger: req.user._id })
+            .populate({
+                path: 'flight',
+                select: 'flightCode departureCity arrivalCity departureTime'
+            });
+        
+        res.json(tickets);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+fine File
+
+flight controller.js
+
+const Flight = require('../models/Flight');
+const Aircraft = require('../models/Aircraft');
+const Ticket = require('../models/Ticket');
+const Route = require('../models/Route');
+
+// @desc    Cerca voli (Pubblico)
+// @route   GET /api/flights/
+exports.searchFlights = async (req, res) => {
+    try {
+        const { from, to, date } = req.query;
+        
+        // 1. Costruiamo il filtro per le ROTTE
+        let routeQuery = {};
+        if (from) routeQuery.$or = [{ departureAirport: new RegExp(from, 'i') }, { departureCity: new RegExp(from, 'i') }];
+        if (to) {
+            if (!routeQuery.$or) routeQuery.$or = []; // Inizializza se vuoto
+            // Nota: se c'è sia from che to, la logica diventa complessa col $or singolo.
+            // Facciamo una query più stretta:
+             routeQuery = {
+                ...routeQuery,
+                $and: [
+                    from ? { $or: [{ departureAirport: new RegExp(from, 'i') }, { departureCity: new RegExp(from, 'i') }] } : {},
+                    to ? { $or: [{ arrivalAirport: new RegExp(to, 'i') }, { arrivalCity: new RegExp(to, 'i') }] } : {}
+                ]
+            };
+            // Pulizia oggetti vuoti nell'and
+             routeQuery.$and = routeQuery.$and.filter(obj => Object.keys(obj).length > 0);
+             if (routeQuery.$and.length === 0) delete routeQuery.$and;
+        }
+
+        // Trova le rotte che corrispondono alla ricerca geografica
+        const matchingRoutes = await Route.find(routeQuery);
+        const routeIds = matchingRoutes.map(r => r._id);
+
+        // Se non trovo rotte, inutile cercare voli
+        if (matchingRoutes.length === 0 && (from || to)) {
+            return res.json([]); 
+        }
+
+        // 2. Costruiamo il filtro per i VOLI
+        let flightQuery = {};
+        
+        // Se abbiamo filtrato per rotta, cerchiamo solo voli con quegli ID rotta
+        if (routeIds.length > 0) {
+            flightQuery.route = { $in: routeIds };
+        }
+
+        // Filtro Data
+        if (date) {
+            const start = new Date(date);
+            const end = new Date(date);
+            end.setDate(end.getDate() + 1);
+            flightQuery.departureTime = { $gte: start, $lt: end };
+        }
+
+        // Eseguiamo la query popolando la rotta
+        const flights = await Flight.find(flightQuery)
+            .populate('aircraft', 'model')
+            .populate('airline', 'airlineName')
+            .populate('route'); // <--- Ora popola i dati della rotta (città, aeroporti)
+
+        res.json(flights);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// @desc    Crea volo (Privato)
+// @route   POST /api/flights
+exports.createFlight = async (req, res) => {
+    console.log("🔥 INIZIO CREAZIONE VOLO (Configurazione Reale)");
+    try {
+        if (!req.user) return res.status(401).json({ message: "Non autorizzato" });
+
+        const { 
+            aircraftId, 
+            routeId,
+            departureTime,
+            priceEconomy, priceBusiness, priceFirst,
+        } = req.body;
+
+        // 1. Recupera l'aereo con la sua configurazione
+        const aircraft = await Aircraft.findById(aircraftId);
+        if (!aircraft) return res.status(404).json({ message: "Aereo non trovato" });
+
+        const route = await Route.findById(routeId);
+        if (!route) return res.status(404).json({ message: "Rotta non trovata" });
+
+        const depTime = new Date(departureTime);
+        const arrTime = new Date(depTime.getTime() + route.durationMinutes * 60000);
+
+        let finalSeats = [];
+        const colLetters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].slice(0, aircraft.seatsPerRow);
+
+        // 2. Contatori per riempire l'aereo (usiamo copie dei valori per scalarli)
+        let seatsLeftFirst = aircraft.capacityFirst;
+        let seatsLeftBusiness = aircraft.capacityBusiness;
+        // Non serve contare economy, tutto il resto sarà economy
+
+        console.log(`🔧 Genero mappa per ${aircraft.model}: F:${seatsLeftFirst} | B:${seatsLeftBusiness} | E:Resto`);
+
+        // 3. Ciclo per riempire le file
+        for (let r = 1; r <= aircraft.rows; r++) {
+            for (let letter of colLetters) {
+                let seatType = 'economy';
+                let seatPrice = parseFloat(priceEconomy);
+
+                // Logica a riempimento:
+                // Se ci sono ancora posti First da piazzare, mettili qui
+                if (seatsLeftFirst > 0) {
+                    seatType = 'first';
+                    seatPrice = parseFloat(priceFirst);
+                    seatsLeftFirst--; // Ne ho piazzato uno
+                } 
+                // Altrimenti, se ci sono posti Business, mettili qui
+                else if (seatsLeftBusiness > 0) {
+                    seatType = 'business';
+                    seatPrice = parseFloat(priceBusiness);
+                    seatsLeftBusiness--; // Ne ho piazzato uno
+                }
+                // Altrimenti resta Economy (default)
+
+                finalSeats.push({ 
+                    number: `${r}${letter}`, 
+                    type: seatType, 
+                    price: seatPrice, 
+                    isOccupied: false 
+                });
+            }
+        }
+
+        // 4. Salva il volo
+        const flight = new Flight({
+            flightCode: req.body.flightCode, 
+            airline: req.user._id,
+            aircraft: aircraft._id,
+            route: route._id,
+            departureTime: depTime,
+            arrivalTime: arrTime, 
+            seats: finalSeats,
+            basePrices: { economy: parseFloat(priceEconomy), business: parseFloat(priceBusiness), first: parseFloat(priceFirst) }
+        });
+
+        const createdFlight = await flight.save();
+        console.log("✅ Volo creato con configurazione aereo corretta:", createdFlight.flightCode);
+        res.status(201).json(createdFlight);
+
+    } catch (error) {
+        console.error("❌ ERRORE:", error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// @desc    Statistiche per la Compagnia
+// @route   GET /api/flights/stats
+exports.getAirlineStats = async (req, res) => {
+    try {
+        // Carichiamo i voli e popoliamo i dati della rotta
+        const myFlights = await Flight.find({ airline: req.user._id }).populate('route');
+        
+        // Se non ci sono voli, usciamo subito
+        if (!myFlights.length) {
+            return res.json({ 
+                totalRevenue: 0, 
+                totalPassengers: 0, 
+                flightCount: 0, 
+                mostFrequentRoute: 'Nessun Volo', 
+                flights: [] 
+            });
+        }
+
+        const flightIds = myFlights.map(f => f._id);
+        const tickets = await Ticket.find({ flight: { $in: flightIds } });
+
+        const totalRevenue = tickets.reduce((acc, ticket) => acc + ticket.totalPrice, 0);
+        const totalPassengers = tickets.length;
+
+        // --- CALCOLO ROTTA PIÙ FREQUENTE (Versione Robusta) ---
+        const routeCounts = {};
+        let maxCount = 0;
+        let bestRouteObj = null;
+
+        console.log(`Analizzando ${myFlights.length} voli per trovare la rotta top...`);
+
+        myFlights.forEach(f => {
+            // 1. Controllo se il volo ha una rotta valida (non null)
+            if (f.route && f.route._id) {
+                const routeId = f.route._id.toString();
+                
+                // Inizializza o incrementa
+                routeCounts[routeId] = (routeCounts[routeId] || 0) + 1;
+
+                // Debug nel terminale
+                // console.log(`Volo ${f.flightCode}: Rotta ${f.route.departureCity}-${f.route.arrivalCity}`);
+
+                // Check se è la nuova vincitrice
+                if (routeCounts[routeId] > maxCount) {
+                    maxCount = routeCounts[routeId];
+                    bestRouteObj = f.route;
+                }
+            } else {
+                console.log(`Volo ${f.flightCode} ignorato: Rotta non trovata (Probabilmente cancellata)`);
+            }
+        });
+
+        // Creiamo la stringa finale
+        let mostFrequentRouteText = 'Dati insuff.';
+        
+        if (bestRouteObj) {
+            mostFrequentRouteText = `${bestRouteObj.departureCity} ➝ ${bestRouteObj.arrivalCity}`;
+            console.log(`Vincitore: ${mostFrequentRouteText} con ${maxCount} voli.`);
+        } else {
+            console.log("Nessuna rotta valida trovata tra i voli esistenti.");
+        }
+        // --------------------------------------------------------
+
+        // Mappatura dati tabella
+        const statsData = myFlights.map(f => {
+            const flightTickets = tickets.filter(t => t.flight.toString() === f._id.toString());
+            const revenue = flightTickets.reduce((acc, t) => acc + t.totalPrice, 0);
+            
+            // Gestione sicura del nome rotta anche nella tabella
+            const routeString = f.route 
+                ? `${f.route.departureCity} (${f.route.departureAirport}) ➝ ${f.route.arrivalCity} (${f.route.arrivalAirport})`
+                : '⚠️ Rotta Cancellata';
+
+            return {
+                flightCode: f.flightCode,
+                route: routeString,
+                revenue,
+                passengers: flightTickets.length,
+                occupancy: f.seats ? Math.round((flightTickets.length / f.seats.length) * 100) + '%' : 'N/A'
+            };
+        });
+
+        res.json({
+            flightCount: myFlights.length,
+            totalPassengers,
+            totalRevenue,
+            mostFrequentRoute: mostFrequentRouteText, // Assicurati che questo nome sia identico nell'HTML
+            flights: statsData
+        });
+
+    } catch (error) {
+        console.error("Errore Stats Backend:", error);
+        res.status(500).json({ message: error.message });
+    }
+};
+exports.getAircrafts = async (req, res) => {
+    try {
+        
+        let query = {};
+        if (req.user && req.user.role === 'airline') {
+            query = { airline: req.user._id };
+        }
+
+        const aircrafts = await Aircraft.find(query);
+        res.json(aircrafts);
+        
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+}
+
+fine File
+
+route controller.js
+
+const Route = require('../models/Route');
+const Aircraft = require('../models/Aircraft');
+
+// @desc    Crea una nuova rotta (Solo Compagnie)
+// @route   POST /api/routes
+exports.createRoute = async (req, res) => {
+    try {
+        const { departureCity, departureAirport, arrivalCity, arrivalAirport, durationMinutes } = req.body;
+
+        // Controllo base: non puoi volare da Roma a Roma
+        if (departureAirport === arrivalAirport) {
+            return res.status(400).json({ message: "L'aeroporto di partenza e arrivo non possono coincidere" });
+        }
+
+        const newRoute = await Route.create({
+            departureCity, departureAirport, arrivalCity, arrivalAirport, durationMinutes
+        });
+
+        res.status(201).json(newRoute);
+    } catch (error) {
+        // Gestione errore duplicato (grazie all'indice unique nel model)
+        if (error.code === 11000) {
+            return res.status(400).json({ message: "Questa rotta esiste già" });
+        }
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// @desc    Ottieni tutte le rotte (Utile per il menu a tendina nel frontend)
+// @route   GET /api/routes
+exports.getRoutes = async (req, res) => {
+    try {
+        const routes = await Route.find();
+        res.json(routes);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+exports.createAircraft = async (req, res) => {
+    try {
+    
+        const aircraft = await Aircraft.create({
+            ...req.body,       
+            airline: req.user._id 
+        });
+
+        res.status(201).json(aircraft);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+exports.getAircrafts = async (req, res) => {
+    try {
+    
+        const aircrafts = await Aircraft.find({ airline: req.user._id });
+        
+        res.json(aircrafts);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+fine File
+
+INIZIO MODELS
+
+Model aircraft.js
+
+const mongoose = require('mongoose');
+
+const aircraftSchema = new mongoose.Schema({
+    model: { type: String, required: true },
+    
+    rows: { type: Number, required: true },       
+    seatsPerRow: { type: Number, required: true }, 
+    
+    airline: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'User', 
+        required: true 
+    },
+    
+    capacityFirst: { type: Number, default: 0 },
+    capacityBusiness: { type: Number, default: 0 },
+    capacityEconomy: { type: Number, required: true } 
+});
+
+aircraftSchema.virtual('totalSeats').get(function() {
+    return this.capacityFirst + this.capacityBusiness + this.capacityEconomy;
+});
+
+module.exports = mongoose.model('Aircraft', aircraftSchema);
+
+fine File
+
+model flight.js
+
+const mongoose = require('mongoose');
+
+const seatSchema = new mongoose.Schema({
+    number: { type: String, required: true }, // Es: "1A", "12F"
+    type: { 
+        type: String, 
+        enum: ['economy', 'business', 'first'], 
+        default: 'economy' 
+    },
+    price: { type: Number, required: true }, // Prezzo specifico per questo sedile
+    isOccupied: { type: Boolean, default: false },
+    occupiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null } // Opzionale, per sapere chi l'ha preso
+});
+
+const flightSchema = new mongoose.Schema({
+    flightCode: { type: String, required: true, unique: true }, // Es: AZ2024
+    
+    airline: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'User', 
+        required: true 
+    },
+    
+    aircraft: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'Aircraft', 
+        required: false 
+    },
+
+    route: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'Route', 
+        required: true 
+    },
+
+    // Orari
+    departureTime: { type: Date, required: true },
+    arrivalTime: { type: Date, required: true },
+    duration: { type: Number }, // In minuti, calcolato o inserito
+
+    // Prezzi base (per riferimento rapido nella ricerca)
+    basePrices: {
+        economy: Number,
+        business: Number,
+        first: Number
+    },
+
+    // L'array dei posti vive QUI dentro!
+    seats: [seatSchema],
+
+    status: { 
+        type: String, 
+        enum: ['scheduled', 'delayed', 'cancelled', 'landed'], 
+        default: 'scheduled' 
+    }
+});
+
+// Indici per velocizzare la ricerca (fondamentale per le performance!)
+flightSchema.index({ departureCity: 1, arrivalCity: 1, departureTime: 1 });
+
+module.exports = mongoose.model('Flight', flightSchema);
+
+fine File
+
+model route.js
+
+const mongoose = require('mongoose');
+
+const routeSchema = new mongoose.Schema({
+    departureCity: { type: String, required: true },
+    departureAirport: { type: String, required: true }, // Es: FCO
+    arrivalCity: { type: String, required: true },
+    arrivalAirport: { type: String, required: true },   // Es: JFK
+    
+    // Potresti voler aggiungere la durata media stimata, ma per ora stiamo semplici
+    durationMinutes: { type: Number, required: true } 
+});
+
+// Indice univoco: Non ha senso avere due rotte identiche duplicate nel DB
+routeSchema.index({ departureAirport: 1, arrivalAirport: 1 }, { unique: true });
+
+module.exports = mongoose.model('Route', routeSchema);
+
+fine File
+
+const mongoose = require('mongoose');
+
+const ticketSchema = new mongoose.Schema({
+    passenger: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'User', 
+        required: true 
+    },
+    flight: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'Flight', 
+        required: true 
+    },
+    seatNumber: { type: String, required: true },
+    
+    // Extras scelti [cite: 10]
+    extras: {
+        extraBaggage: { type: Boolean, default: false },
+        priorityBoarding: { type: Boolean, default: false },
+        extraLegroom: { type: Boolean, default: false }
+    },
+
+    totalPrice: { type: Number, required: true }, // Quanto ha pagato in totale
+    purchaseDate: { type: Date, default: Date.now },
+    
+    status: { type: String, enum: ['confirmed', 'cancelled'], default: 'confirmed' }
+});
+
+module.exports = mongoose.model('Ticket', ticketSchema);
+
+fine File
+
+model user.js
+
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs'); // Assicurati di fare npm install bcryptjs
+
+const userSchema = new mongoose.Schema({
+    email: { 
+        type: String, 
+        required: true, 
+        unique: true, 
+        lowercase: true, 
+        trim: true 
+    },
+    password: { 
+        type: String, 
+        required: true 
+    },
+    role: { 
+        type: String, 
+        enum: ['admin', 'airline', 'passenger'], 
+        required: true 
+    },
+
+    mustChangePassword: { type: Boolean, default: false },
+    // Dati specifici per Passeggeri
+    name: { type: String },
+    surname: { type: String },
+    birthDate: { type: Date },
+
+    // Dati specifici per Compagnie Aeree
+    airlineName: { type: String }, // Nome della compagnia
+    iataCode: { type: String, uppercase: true }, // Es: AZ, RYR
+    
+    createdAt: { type: Date, default: Date.now }
+});
+
+// Middleware per hashare la password prima di salvare (Sicurezza base!)
+userSchema.pre('save', async function(next) {
+    if (!this.isModified('password')) return next();
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+});
+
+// Metodo helper per confrontare password
+userSchema.methods.matchPassword = async function(enteredPassword) {
+    return await bcrypt.compare(enteredPassword, this.password);
+};
+
+module.exports = mongoose.model('User', userSchema);
+
+fine file
+
+INIZIO ROUTES File
+
+authroutes.js
+
+const express = require('express');
+const router = express.Router();
+const { register, login, createAirline, completeSetup, deleteUser, getAllUsers } = require('../controllers/authController');
+const { protect, adminOnly } = require('../middleware/authMiddleware');
+
+router.post('/register', register);
+router.post('/login', login);
+
+router.post('/complete-setup', protect, completeSetup);
+
+router.post('/create-airline', protect, adminOnly, createAirline);
+router.delete('/users/:id', protect, adminOnly, deleteUser);
+router.get('/users', protect, adminOnly, getAllUsers); 
+
+module.exports = router;
+
+fine File
+
+flightroutes.js
+
+const express = require('express');
+const router = express.Router();
+
+const { searchFlights, createFlight, getAirlineStats, getAircrafts } = require('../controllers/flightController');
+const { protect, airlineOnly } = require('../middleware/authMiddleware');
+
+// --- LE ROTTE ---
+router.get('/aircrafts', protect, airlineOnly, getAircrafts);
+router.get('/stats', protect, airlineOnly, getAirlineStats);
+router.get('/', searchFlights);
+router.post('/', protect, airlineOnly, createFlight);
+
+module.exports = router;
+
+fine file
+
+booking routes file
+
+const express = require('express');
+const router = express.Router();
+const { bookFlight, getMyTickets } = require('../controllers/bookingController');
+const { protect } = require('../middleware/authMiddleware');
+
+// Tutte le rotte qui sotto richiedono il login
+router.post('/', protect, bookFlight);
+router.get('/my-tickets', protect, getMyTickets);
+
+module.exports = router;
+
+fine file
+
+menagment routes file
+
+const express = require('express');
+const router = express.Router();
+const { createRoute, getRoutes, createAircraft, getAircrafts } = require('../controllers/routeController');
+const { protect, airlineOnly } = require('../middleware/authMiddleware');
+
+// Gestione Rotte
+router.post('/routes', protect, airlineOnly, createRoute); // Punto 1
+router.get('/routes', getRoutes); // Utility per il frontend
+
+// Gestione Aerei (Punto 2)
+router.post('/aircrafts', protect, airlineOnly, createAircraft);
+router.get('/aircrafts', protect, airlineOnly, getAircrafts);
+
+module.exports = router;
+
+fine file

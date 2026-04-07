@@ -1,0 +1,48 @@
+services:
+  # 1. MONGODB (Database)
+  mongo:
+    image: mongo:latest
+    container_name: taw_mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - taw_network
+
+  # 2. BACKEND (Node.js API)
+  backend:
+    build: ./taw-backend
+    container_name: taw_backend
+    ports:
+      - "3000:3000"
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/taw_project
+      - PORT=3000
+    depends_on:
+      - mongo
+    volumes:
+      - ./taw-backend:/app          
+      - /app/node_modules      
+    networks:
+      - taw_network
+
+  # 3. FRONTEND (Angular)
+  frontend:
+    build: ./taw-frontend
+    container_name: taw_frontend
+    ports:
+      - "4200:4200"
+    depends_on:
+      - backend
+    volumes:
+      - ./taw-frontend:/app         
+      - /app/node_modules       
+    networks:
+      - taw_network
+
+networks:
+  taw_network:
+
+volumes:
+  mongo_data:
